@@ -1,0 +1,39 @@
+{
+  "name": "claude-recontext",
+  "version": "1.0.0",
+  "description": "Claude Code proje yolunu taşıma aracı — konuşmaları yeni dizinle eşleştir",
+  "main": "src/index.js",
+  "bin": {
+    "claude-recontext": "bin/claude-recontext.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "migration",
+    "project",
+    "path"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morphaven/claude-recontext"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

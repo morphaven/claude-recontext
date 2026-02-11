@@ -8,8 +8,10 @@ const { PROJECTS_DIR } = require('./utils');
 
 /**
  * Get the real project path. Tries (in order):
- * 1. sessions-index.json → originalPath / entries[0].projectPath
- * 2. First .jsonl file → cwd field (streaming, first 20 lines)
+ * 1. sessions-index.json → originalPath / entries[].projectPath
+ * 2. Root JSONL files → cwd field (tries all, not just the first)
+ * 3. Session subdirectory JSONL files (UUID dirs one level deep)
+ * 4. Subagent JSONL files (UUID/subagents/*.jsonl)
  */
 async function detectProjectPath(projectDir) {
   // Try sessions-index.json
@@ -17,21 +19,59 @@ async function detectProjectPath(projectDir) {
     const data = await fs.readFile(path.join(projectDir, 'sessions-index.json'), 'utf8');
     const json = JSON.parse(data);
     if (json.originalPath) return json.originalPath;
-    if (json.entries && json.entries.length > 0 && json.entries[0].projectPath) {
-      return json.entries[0].projectPath;
+    if (json.entries && json.entries.length > 0) {
+      for (const entry of json.entries) {
+        if (entry.projectPath) return entry.projectPath;
+      }
     }
   } catch {}
 
-  // Try first JSONL file → scan for cwd
+  // Try root JSONL files — iterate all until one has cwd
   try {
     const files = await fs.readdir(projectDir);
-    const jsonl = files.filter(f => f.endsWith('.jsonl'));
-    if (jsonl.length > 0) {
-      return await findCwdInJsonl(path.join(projectDir, jsonl[0]));
+    const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
+    for (const f of jsonlFiles) {
+      const cwd = await findCwdInJsonl(path.join(projectDir, f));
+      if (cwd) return cwd;
+    }
+  } catch {}
+
+  // Try JSONL files inside session subdirectories (one level deep)
+  try {
+    const entries = await fs.readdir(projectDir, { withFileTypes: true });
+    const uuidDirs = entries.filter(e => e.isDirectory() && isUUID(e.name));
+    for (const dir of uuidDirs) {
+      const sessionDir = path.join(projectDir, dir.name);
+      // Check JSONL at session level
+      try {
+        const sessionFiles = await fs.readdir(sessionDir);
+        const jsonlFiles = sessionFiles.filter(f => f.endsWith('.jsonl'));
+        for (const f of jsonlFiles) {
+          const cwd = await findCwdInJsonl(path.join(sessionDir, f));
+          if (cwd) return cwd;
+        }
+      } catch {}
+      // Check subagents directory
+      const subagentsDir = path.join(sessionDir, 'subagents');
+      try {
+        const subFiles = await fs.readdir(subagentsDir);
+        const jsonlFiles = subFiles.filter(f => f.endsWith('.jsonl'));
+        for (const f of jsonlFiles) {
+          const cwd = await findCwdInJsonl(path.join(subagentsDir, f));
+          if (cwd) return cwd;
+        }
+      } catch {}
     }
   } catch {}
 
   return null;
+}
+
+/**
+ * Check if a string looks like a UUID (session directory name).
+ */
+function isUUID(name) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
 }
 
 /**
@@ -95,7 +135,7 @@ async function listProjects() {
       dirPath,
       projectPath: realPath || decodeProjectName(entry.name),
       hasRealPath: !!realPath,
-      exists, // true = on disk, false = broken, null = unknown
+      exists,
     });
   }
 

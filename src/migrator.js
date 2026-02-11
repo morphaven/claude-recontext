@@ -7,7 +7,7 @@ const readline = require('readline');
 const { encodeProjectPath } = require('./encoder');
 const { normalizePath, PROJECTS_DIR, HISTORY_FILE } = require('./utils');
 const { updateSessionsIndex } = require('./sessions');
-const { findJsonlFiles, updateJsonlFile } = require('./jsonl');
+const { findJsonlFiles, findFiles, updateJsonlFile, updateTextFile, buildSearchTerms } = require('./jsonl');
 const { projectDirExists } = require('./scanner');
 const ui = require('./ui');
 
@@ -72,7 +72,7 @@ async function migrate({ fromPath, toPath, dryRun = false }) {
       ui.info('sessions-index.json bulunamadı veya değişiklik gerekmedi.');
     }
 
-    // Step 3: Update JSONL files in project directory
+    // Step 3: Update JSONL files
     ui.heading('Adım 3: JSONL dosyaları güncelleniyor');
     const jsonlFiles = await findJsonlFiles(newDir);
     let jsonlUpdated = 0;
@@ -85,32 +85,42 @@ async function migrate({ fromPath, toPath, dryRun = false }) {
         ui.fileUpdated(result.path);
       }
     }
-    if (jsonlUpdated === 0) {
-      ui.info('JSONL dosyalarında değişiklik gerekmedi.');
-    } else {
-      ui.info(`${jsonlUpdated} dosyada toplam ${totalLines} satır güncellendi.`);
-    }
+    ui.info(jsonlUpdated === 0
+      ? 'JSONL dosyalarında değişiklik gerekmedi.'
+      : `${jsonlUpdated} dosyada toplam ${totalLines} satır güncellendi.`);
 
-    // Step 4: Update history.jsonl (reuse same JSONL updater)
+    // Step 4: Update history.jsonl
     ui.heading('Adım 4: history.jsonl güncelleniyor');
     try {
       const histResult = await updateJsonlFile(HISTORY_FILE, from, to);
-      if (histResult.updated) {
-        ui.fileUpdated(histResult.path);
-        ui.info(`${histResult.linesChanged} satır güncellendi.`);
-      } else {
-        ui.info('history.jsonl değişiklik gerekmedi.');
-      }
+      ui.info(histResult.updated
+        ? `${histResult.linesChanged} satır güncellendi.`
+        : 'Değişiklik gerekmedi.');
     } catch (err) {
-      if (err.code === 'ENOENT') {
-        ui.info('history.jsonl bulunamadı.');
-      } else {
-        throw err;
-      }
+      if (err.code === 'ENOENT') ui.info('history.jsonl bulunamadı.');
+      else throw err;
     }
 
-    // Step 5: Verification (full streaming scan)
-    ui.heading('Adım 5: Doğrulama');
+    // Step 5: Update memory files (.md)
+    ui.heading('Adım 5: Memory dosyaları güncelleniyor');
+    const mdFiles = await findFiles(newDir, ['.md']);
+    let mdUpdated = 0;
+    for (const file of mdFiles) {
+      const result = await updateTextFile(file, from, to);
+      if (result.updated) {
+        mdUpdated++;
+        if (result.originalContent) {
+          rollback.push({ type: 'file-content', path: result.path, content: result.originalContent });
+        }
+        ui.fileUpdated(result.path);
+      }
+    }
+    ui.info(mdUpdated === 0
+      ? 'Memory dosyalarında değişiklik gerekmedi.'
+      : `${mdUpdated} dosya güncellendi.`);
+
+    // Step 6: Verification
+    ui.heading('Adım 6: Doğrulama');
     const remaining = await verifyNoOldRefs(newDir, from);
     if (remaining.length === 0) {
       ui.success('Migrasyon başarıyla tamamlandı! Eski path referansı kalmadı.');
@@ -130,6 +140,7 @@ async function migrate({ fromPath, toPath, dryRun = false }) {
       sessionsUpdated: sessResult.updated,
       jsonlFilesUpdated: jsonlUpdated,
       jsonlLinesChanged: totalLines,
+      memoryFilesUpdated: mdUpdated,
     };
   } catch (err) {
     ui.heading('HATA — Geri alma işlemi başlatılıyor');
@@ -154,9 +165,6 @@ async function migrate({ fromPath, toPath, dryRun = false }) {
   }
 }
 
-/**
- * Dry-run: show what would change without modifying anything.
- */
 async function dryRunMigration(oldDir, newDir, from) {
   const changes = [];
 
@@ -164,7 +172,6 @@ async function dryRunMigration(oldDir, newDir, from) {
   ui.info('Dizin yeniden adlandırılacak:');
   ui.migration(oldDir, newDir);
 
-  // Sessions index
   const indexPath = path.join(oldDir, 'sessions-index.json');
   try {
     await fs.access(indexPath);
@@ -172,7 +179,6 @@ async function dryRunMigration(oldDir, newDir, from) {
     ui.info('Güncellenecek: sessions-index.json');
   } catch {}
 
-  // JSONL files — full streaming scan
   const jsonlFiles = await findJsonlFiles(oldDir);
   for (const file of jsonlFiles) {
     if (await fileContainsPath(file, from)) {
@@ -181,7 +187,14 @@ async function dryRunMigration(oldDir, newDir, from) {
     }
   }
 
-  // History
+  const mdFiles = await findFiles(oldDir, ['.md']);
+  for (const file of mdFiles) {
+    if (await fileContainsPath(file, from)) {
+      changes.push({ type: 'update-file', path: file });
+      ui.fileUpdated(file + ' (güncellenecek)');
+    }
+  }
+
   try {
     if (await fileContainsPath(HISTORY_FILE, from)) {
       changes.push({ type: 'update-file', path: HISTORY_FILE });
@@ -195,12 +208,8 @@ async function dryRunMigration(oldDir, newDir, from) {
   return { dryRun: true, changes };
 }
 
-/**
- * Stream-scan a file for any occurrence of oldPath (all variants).
- */
 async function fileContainsPath(filePath, oldPath) {
   const terms = buildSearchTerms(oldPath);
-
   const rl = readline.createInterface({
     input: fsSync.createReadStream(filePath, { encoding: 'utf8' }),
     crlfDelay: Infinity,
@@ -216,31 +225,22 @@ async function fileContainsPath(filePath, oldPath) {
   return false;
 }
 
-/**
- * Full streaming verification: check every line for old path refs.
- */
 async function verifyNoOldRefs(projectDir, oldPath) {
-  const files = await findJsonlFiles(projectDir);
+  const allFiles = [
+    ...await findJsonlFiles(projectDir),
+    ...await findFiles(projectDir, ['.md']),
+  ];
+
   const sessIndex = path.join(projectDir, 'sessions-index.json');
-  try {
-    await fs.access(sessIndex);
-    files.push(sessIndex);
-  } catch {}
+  try { await fs.access(sessIndex); allFiles.push(sessIndex); } catch {}
 
   const remaining = [];
-  for (const file of files) {
+  for (const file of allFiles) {
     if (await fileContainsPath(file, oldPath)) {
       remaining.push(file);
     }
   }
   return remaining;
-}
-
-function buildSearchTerms(oldPath) {
-  const fwd = oldPath.replace(/\\/g, '/').toLowerCase();
-  const back = oldPath.replace(/\//g, '\\').toLowerCase();
-  const esc = back.replace(/\\/g, '\\\\').toLowerCase();
-  return [fwd, back, esc];
 }
 
 module.exports = { migrate };

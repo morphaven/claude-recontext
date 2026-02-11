@@ -30,7 +30,7 @@ Or use directly with `npx` (no install needed).
 ## Usage
 
 ```bash
-# Interactive mode — pick a project from a list
+# Interactive mode — pick a project, broken ones shown first
 claude-recontext
 
 # Direct migration
@@ -38,6 +38,9 @@ claude-recontext --from "C:\old\path" --to "C:\new\path"
 
 # Preview changes without applying
 claude-recontext --from "C:\old\path" --to "C:\new\path" --dry-run
+
+# Find broken projects (path no longer exists on disk)
+claude-recontext --check
 
 # List all registered projects
 claude-recontext --list
@@ -49,9 +52,27 @@ claude-recontext --list
 2. **Updates** `sessions-index.json` with new path references
 3. **Updates** all `.jsonl` session files (streaming — handles 300MB+ files)
 4. **Updates** `~/.claude/history.jsonl` so recent activity shows correctly
-5. **Verifies** no old path references remain
+5. **Updates** memory files (`.md`) that may contain path references
+6. **Verifies** no old path references remain (full streaming scan)
 
 All changes are **atomic** (write to temp file → rename) with **automatic rollback** if anything fails mid-migration.
+
+## Health Check
+
+Detect projects whose directories no longer exist on disk:
+
+```bash
+claude-recontext --check
+```
+
+```
+Proje Sağlık Kontrolü
+
+5 kırık proje bulundu:
+
+   1. C:\Users\Me\old-location\my-project
+      C--Users-Me-old-location-my-project
+```
 
 ## How Path Encoding Works
 

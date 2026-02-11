@@ -7,18 +7,17 @@ const readline = require('readline');
 const { replacePath, atomicWrite } = require('./utils');
 
 /**
- * Find all .jsonl files in a directory (recursive).
+ * Find files by extension in a directory (recursive).
  */
-async function findJsonlFiles(dir) {
+async function findFiles(dir, extensions) {
   const results = [];
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const sub = await findJsonlFiles(fullPath);
-        results.push(...sub);
-      } else if (entry.name.endsWith('.jsonl')) {
+        results.push(...await findFiles(fullPath, extensions));
+      } else if (extensions.some(ext => entry.name.endsWith(ext))) {
         results.push(fullPath);
       }
     }
@@ -26,21 +25,17 @@ async function findJsonlFiles(dir) {
   return results;
 }
 
+async function findJsonlFiles(dir) {
+  return findFiles(dir, ['.jsonl']);
+}
+
 /**
  * Update a JSONL file, replacing old path references with new ones.
  * Uses streaming to handle large files (300+ MB).
- *
  * Fast path: lines not containing oldPath string are written as-is.
- *
- * Returns { updated: boolean, path: string, linesChanged: number }
  */
 async function updateJsonlFile(filePath, oldPath, newPath) {
-  const oldFwd = oldPath.replace(/\\/g, '/');
-  const oldBack = oldPath.replace(/\//g, '\\');
-  const oldEsc = oldBack.replace(/\\/g, '\\\\');
-
-  const searchTerms = [oldFwd, oldBack, oldEsc].map(s => s.toLowerCase());
-
+  const searchTerms = buildSearchTerms(oldPath);
   const tmpPath = filePath + '.tmp.' + Date.now();
   const writeStream = fsSync.createWriteStream(tmpPath, { encoding: 'utf8' });
 
@@ -55,30 +50,19 @@ async function updateJsonlFile(filePath, oldPath, newPath) {
 
     for await (const line of rl) {
       const lineLower = line.toLowerCase();
-      const containsOld = searchTerms.some(term => lineLower.includes(term));
-
-      if (!containsOld) {
+      if (!searchTerms.some(term => lineLower.includes(term))) {
         writeStream.write(line + '\n');
         continue;
       }
 
-      // Line contains old path — parse, update, re-serialize
       try {
         const obj = JSON.parse(line);
-        const updated = deepReplacePaths(obj, oldPath, newPath);
-        const newLine = JSON.stringify(updated);
-        if (newLine !== line) {
-          linesChanged++;
-          hasChanges = true;
-        }
+        const newLine = JSON.stringify(deepReplacePaths(obj, oldPath, newPath));
+        if (newLine !== line) { linesChanged++; hasChanges = true; }
         writeStream.write(newLine + '\n');
       } catch {
-        // Not valid JSON, write as-is but still do string replacement
         const newLine = replacePath(line, oldPath, newPath);
-        if (newLine !== line) {
-          linesChanged++;
-          hasChanges = true;
-        }
+        if (newLine !== line) { linesChanged++; hasChanges = true; }
         writeStream.write(newLine + '\n');
       }
     }
@@ -89,7 +73,6 @@ async function updateJsonlFile(filePath, oldPath, newPath) {
     });
 
     if (hasChanges) {
-      // Atomic swap
       if (process.platform === 'win32') {
         try { await fs.unlink(filePath); } catch {}
       }
@@ -106,15 +89,20 @@ async function updateJsonlFile(filePath, oldPath, newPath) {
 }
 
 /**
- * Deep-replace path strings in an object.
+ * Update a text file (e.g. .md), replacing old path references.
+ * For small files — reads entirely into memory.
  */
+async function updateTextFile(filePath, oldPath, newPath) {
+  const content = await fs.readFile(filePath, 'utf8');
+  const updated = replacePath(content, oldPath, newPath);
+  if (updated === content) return { updated: false, path: filePath };
+  await atomicWrite(filePath, updated);
+  return { updated: true, path: filePath, originalContent: content };
+}
+
 function deepReplacePaths(obj, oldPath, newPath) {
-  if (typeof obj === 'string') {
-    return replacePath(obj, oldPath, newPath);
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(item => deepReplacePaths(item, oldPath, newPath));
-  }
+  if (typeof obj === 'string') return replacePath(obj, oldPath, newPath);
+  if (Array.isArray(obj)) return obj.map(item => deepReplacePaths(item, oldPath, newPath));
   if (obj && typeof obj === 'object') {
     const result = {};
     for (const [key, value] of Object.entries(obj)) {
@@ -125,4 +113,11 @@ function deepReplacePaths(obj, oldPath, newPath) {
   return obj;
 }
 
-module.exports = { findJsonlFiles, updateJsonlFile };
+function buildSearchTerms(oldPath) {
+  const fwd = oldPath.replace(/\\/g, '/').toLowerCase();
+  const back = oldPath.replace(/\//g, '\\').toLowerCase();
+  const esc = back.replace(/\\/g, '\\\\').toLowerCase();
+  return [fwd, back, esc];
+}
+
+module.exports = { findFiles, findJsonlFiles, updateJsonlFile, updateTextFile, buildSearchTerms };

@@ -9,6 +9,10 @@
   "files": [
     "bin/",
     "src/",
+    "scripts/",
+    "skills/",
+    "hooks/",
+    ".claude-plugin/",
     "LICENSE"
   ],
   "scripts": {

@@ -1,0 +1,13 @@
+{
+  "name": "claude-recontext",
+  "version": "1.0.0",
+  "description": "Claude Code proje yolunu taşıma aracı — konuşmaları yeni dizinle eşleştirir. Proje dizini taşındıktan sonra kırık referansları otomatik tespit eder ve düzeltir.",
+  "author": {
+    "name": "morphaven",
+    "url": "https://github.com/morphaven"
+  },
+  "repository": "https://github.com/morphaven/claude-recontext",
+  "license": "MIT",
+  "keywords": ["migration", "path", "project", "recontext"],
+  "hooks": "./hooks/hooks.json"
+}

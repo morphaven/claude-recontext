@@ -74,6 +74,26 @@ Proje Sağlık Kontrolü
       C--Users-Me-old-location-my-project
 ```
 
+## Claude Code Plugin
+
+This package also works as a **Claude Code plugin** with automatic broken project detection and slash commands.
+
+### Install as Plugin
+
+```bash
+claude plugin install /path/to/claude-recontext
+```
+
+### What You Get
+
+- **`/recontext`** — Interactive migration wizard inside Claude Code
+- **`/check-projects`** — Health check for all registered projects
+- **SessionStart hook** — Automatically warns you about broken projects when a new conversation starts
+
+### How It Works
+
+When Claude Code starts a new conversation, the plugin scans `~/.claude/projects/` for broken references. If any are found, Claude will let you know and suggest running `/recontext` to fix them.
+
 ## How Path Encoding Works
 
 Claude Code encodes project paths into directory names:
